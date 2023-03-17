@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  httpmqb:
+    image: httpmqb
+    container_name: httpmqb
+    build:
+      dockerfile: ./build/Dockerfile_httpmqb
+    ports:
+      - ${HTTPMQB_PORT}:${HTTPMQB_PORT}
+    environment:
+      - HTTPMQB_PORT=${HTTPMQB_PORT}
+    depends_on:
+      - fluentd
+
+  fluentd:
+    image: fluent/fluentd:latest
+    build:
+      dockerfile: ./build/Dockerfile_fluentd
+    user: root
+    volumes:
+      - /var/lib/docker/containers/:/fluentd/log/containers/
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
+    logging:
+      driver: "local"

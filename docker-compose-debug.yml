@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  httpmqb:
+    image: httpmqb
+    container_name: httpmqb
+    build:
+      dockerfile: ./build/Dockerfile.dbg
+    ports:
+      - ${HTTPMQB_PORT}:${HTTPMQB_PORT}
+      - 2345:2345
+    security_opt:
+      - "seccomp:unconfined"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - HTTPMQB_PORT=${HTTPMQB_PORT}

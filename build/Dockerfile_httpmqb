@@ -1,0 +1,12 @@
+FROM golang:latest AS builder
+WORKDIR /app
+ADD . /app/
+RUN go mod tidy
+RUN go mod verify
+RUN CGO_ENABLED=0 go build -o httpmqb cmd/main.go
+RUN go test ./...
+
+FROM scratch
+WORKDIR /app
+COPY --from=builder ./app/httpmqb .
+CMD ["./httpmqb"]

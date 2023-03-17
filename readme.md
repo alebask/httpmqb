@@ -1,0 +1,1 @@
+basic in-memory http queue broker made for one reason only - to learn go
