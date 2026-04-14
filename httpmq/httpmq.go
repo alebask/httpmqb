@@ -116,21 +116,32 @@ func (mq *httpmq) push(topic, value string) {
 		value: value,
 	}
 }
-func (mq *httpmq) pop(topic string, timeout int) (string, bool) {
+func (mq *httpmq) pop(ctx context.Context, topic string, timeout int) (string, bool) {
 	valueCh := make(chan string, 1)
 	done := make(chan struct{})
 	mq.popCh <- popMessage{topic: topic, valueCh: valueCh, done: done}
 
-	if timeout == 0 {
-		value := <-valueCh
-		return value, true
+	// A nil timer channel never fires; used for the infinite-wait (timeout==0) case.
+	var timer <-chan time.Time
+	if timeout > 0 {
+		timer = time.After(time.Duration(timeout) * time.Second)
 	}
+
 	select {
 	case value := <-valueCh:
 		return value, true
-	case <-time.After(time.Duration(timeout) * time.Second):
+	case <-timer:
 		close(done)
 		// Drain in case a value was delivered concurrently with the timeout.
+		select {
+		case value := <-valueCh:
+			return value, true
+		default:
+			return "", false
+		}
+	case <-ctx.Done():
+		close(done)
+		// Drain in case a value was delivered concurrently with cancellation.
 		select {
 		case value := <-valueCh:
 			return value, true
@@ -166,7 +177,7 @@ func (mq *httpmq) popHandler(w http.ResponseWriter, r *http.Request) {
 		timeout = 0
 	}
 
-	value, ok := mq.pop(topicName, timeout)
+	value, ok := mq.pop(r.Context(), topicName, timeout)
 
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
