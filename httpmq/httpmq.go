@@ -173,8 +173,9 @@ func (mq *httpmq) popHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	timeout, err := strconv.Atoi(r.URL.Query().Get("timeout"))
-	if err != nil {
-		timeout = 0
+	if err != nil && r.URL.Query().Has("timeout") {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
 	value, ok := mq.pop(r.Context(), topicName, timeout)
