@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,38 +21,50 @@ type pushMessage struct {
 type popMessage struct {
 	topic   string
 	valueCh chan string
+	done    chan struct{}
 }
+
+// listener pairs a consumer's response channel with a cancellation signal.
+// done is closed by the consumer when it times out, so the event loop can
+// skip it rather than delivering to a goroutine that has already returned.
+type listener struct {
+	valueCh chan string
+	done    chan struct{}
+}
+
 type topic struct {
 	items     *queue.Queue[string]
-	listeners *queue.Queue[chan string]
+	listeners *queue.Queue[listener]
 }
 
-func (t *topic) pop(out chan string) {
-
+func (t *topic) pop(lsr listener) {
 	value, ok := t.items.Pop()
 	if !ok {
-		t.listeners.Push(out)
+		t.listeners.Push(lsr)
 	} else {
-		select {
-		case out <- value:
-		default:
-			t.listeners.Push(out)
-		}
+		lsr.valueCh <- value // buffered(1): always succeeds, no race with consumer start
 	}
 }
+
 func (t *topic) push(value string) {
 	for {
 		lsr, ok := t.listeners.Pop()
 		if !ok {
 			t.items.Push(value)
 			return
-		} else {
-			select {
-			case lsr <- value:
-				return
-			default:
-				continue
-			}
+		}
+		// Skip listeners that already timed out.
+		select {
+		case <-lsr.done:
+			continue
+		default:
+		}
+		// Deliver; handle the case where the listener cancels simultaneously.
+		select {
+		case lsr.valueCh <- value:
+			return
+		case <-lsr.done:
+			continue
 		}
 	}
 }
@@ -75,7 +88,7 @@ func (mq *httpmq) getOrCreateTopic(name string) *topic {
 	if !ok {
 		t = &topic{
 			items:     queue.New[string](),
-			listeners: queue.New[chan string](),
+			listeners: queue.New[listener](),
 		}
 		mq.topics[name] = t
 	}
@@ -90,7 +103,7 @@ func (mq *httpmq) start(done <-chan struct{}) {
 			t.push(msg.value)
 		case msg := <-mq.popCh:
 			t := mq.getOrCreateTopic(msg.topic)
-			t.pop(msg.valueCh)
+			t.pop(listener{valueCh: msg.valueCh, done: msg.done})
 		case <-done:
 			return
 		}
@@ -104,18 +117,24 @@ func (mq *httpmq) push(topic, value string) {
 	}
 }
 func (mq *httpmq) pop(topic string, timeout int) (string, bool) {
-
-	valueCh := make(chan string)
-	mq.popCh <- popMessage{topic: topic, valueCh: valueCh}
+	valueCh := make(chan string, 1)
+	done := make(chan struct{})
+	mq.popCh <- popMessage{topic: topic, valueCh: valueCh, done: done}
 
 	if timeout == 0 {
 		value := <-valueCh
 		return value, true
-	} else {
+	}
+	select {
+	case value := <-valueCh:
+		return value, true
+	case <-time.After(time.Duration(timeout) * time.Second):
+		close(done)
+		// Drain in case a value was delivered concurrently with the timeout.
 		select {
 		case value := <-valueCh:
 			return value, true
-		case <-time.After(time.Duration(timeout) * time.Second):
+		default:
 			return "", false
 		}
 	}
@@ -174,7 +193,11 @@ func (mq *httpmq) ListenAndServe(port int) error {
 	http.Handle("/", mq)
 
 	done := make(chan struct{})
-	defer close(done)
+	var once sync.Once
+	shutdown := func() {
+		once.Do(func() { close(done) })
+	}
+	defer shutdown()
 
 	go mq.start(done)
 
@@ -183,9 +206,8 @@ func (mq *httpmq) ListenAndServe(port int) error {
 		for s != "q" {
 			fmt.Scanln(&s)
 		}
-		done <- struct{}{}
-		err := srv.Shutdown(context.Background())
-		if err != nil {
+		shutdown()
+		if err := srv.Shutdown(context.Background()); err != nil {
 			logger.Error("http server shutdown error", logger.Fields{"error": err, "port": port})
 		}
 	}()
@@ -195,8 +217,10 @@ func (mq *httpmq) ListenAndServe(port int) error {
 	go func() {
 		<-sig
 		logger.Info("httpmbq shutting down after ctrl-c", logger.Fields{"port": port})
-		done <- struct{}{}
-		srv.Shutdown(context.Background())
+		shutdown()
+		if err := srv.Shutdown(context.Background()); err != nil {
+			logger.Error("http server shutdown error", logger.Fields{"error": err, "port": port})
+		}
 	}()
 
 	return srv.ListenAndServe()
