@@ -182,7 +182,9 @@ func (mq *httpmq) popHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 	} else {
-		w.Write([]byte(value))
+		if _, err := w.Write([]byte(value)); err != nil {
+			logger.Warning("failed to write response", logger.Fields{"error": err})
+		}
 	}
 }
 func (mq *httpmq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
