@@ -229,7 +229,7 @@ func (mq *httpmq) ListenAndServe(port int) error {
 	signal.Notify(sig, os.Interrupt)
 	go func() {
 		<-sig
-		logger.Info("httpmbq shutting down after ctrl-c", logger.Fields{"port": port})
+		logger.Info("httpmqb shutting down after ctrl-c", logger.Fields{"port": port})
 		shutdown()
 		if err := srv.Shutdown(context.Background()); err != nil {
 			logger.Error("http server shutdown error", logger.Fields{"error": err, "port": port})
