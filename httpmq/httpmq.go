@@ -189,8 +189,7 @@ func (mq *httpmq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (mq *httpmq) ListenAndServe(port int) error {
 
-	srv := http.Server{Addr: ":" + strconv.Itoa(port)}
-	http.Handle("/", mq)
+	srv := http.Server{Addr: ":" + strconv.Itoa(port), Handler: mq}
 
 	done := make(chan struct{})
 	var once sync.Once
